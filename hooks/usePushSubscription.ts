@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import * as rt from 'runtypes';
 import { fromLocal, toLocal } from "../../pr-lib-utils/client/storage";
+import { I18nPush } from "../components/I18nPush";
 
 
 export const PushSubscriptionInLocalStorage = rt.Object({
@@ -24,18 +25,53 @@ export type PushSubscriptionSender = (sub: { device: string; browser: string; su
 }>;
 
 
+export interface PushSubscriptionModalProps {
+    l: I18nPush;
+    show: boolean;
+    error: string;
+    warning: string;
+    onHide(): void;
+}
+
+type UsePushSubscriptionRes = [
+    pushSubscriptionModalProps: PushSubscriptionModalProps,
+    /**
+     * Das Ergebnis befindet sich in localStorage[storageKey]
+     */
+    tryCreatePushSubscription: () => Promise<void>,
+
+]
+
+/**
+ * Does not register any service worker, but depends that a service worker that can handle push events is registered for route `'/'`.
+ * On mount, an effect is started that checks if `localStorage` contains an entry with a stringified object of `PushSubscriptionInLocalStorage` for the key `'pushSubscription'`.
+ * If it does, it checks the permission state for push subscriptions. 
+ * If it is `denied`, the modal becomes visible and shows an error, and the subscription in `localStorage` is set to null, and it is also sent with null using `sendPushSubscription()`.
+ * Otherwise, it renews the push subscription in the pushManager, updates the entry in `localStorage` and sends a new valid push subscription with the given `sendPushSubscription()`.
+ */
 export default function usePushSubscription(
+    l: I18nPush,
     clientURL: string | URL,
     storageKey: string,
     vapidKeyPublic: string,
-    onError: PushSubscriptionHandler,
     sendPushSubscription: PushSubscriptionSender,
     delayStart?: boolean,
-): [
-        showModal: boolean,
-        onHide: () => void
-    ] {
+): UsePushSubscriptionRes {
     const [showModal, setShowModal] = useState(false);
+    const [error, setError] = useState('');
+    const [warning, setWarning] = useState('');
+
+    const onError = useCallback<PushSubscriptionHandler>((e) => {
+        console.log('onPushError', e);
+        switch (e) {
+            case 'no-service-worker-found':
+                setError(l.eNoServiceWorker);
+                break;
+            case 'permission-denied':
+                setWarning(l.wPermissionDenied);
+                break;
+        }
+    }, [l])
 
     useEffect(() => {
 
@@ -102,9 +138,70 @@ export default function usePushSubscription(
         setShowModal(false);
     }, [])
 
-    return [
-        showModal,
-        onHide
+    const pushSubscriptionModalProps: PushSubscriptionModalProps = {
+        l: l,
+        show: showModal,
+        error,
+        warning,
+        onHide,
+    }
+
+    const tryCreatePushSubscription = useCallback(async () => {
+
+        const pushSubscriptionOptions = {
+            userVisibleOnly: true,
+            applicationServerKey: vapidKeyPublic
+        };
+
+        const reg = await navigator.serviceWorker.getRegistration(clientURL)
+        if (reg == null) {
+            setShowModal(true);
+            onError('no-service-worker-found');
+            return;
+        }
+        const permissionState = await reg.pushManager.permissionState(pushSubscriptionOptions);
+        const device = 'TODO device';
+        const browser = 'TODO browser';
+
+        switch (permissionState) {
+            case 'denied':
+                toLocal(storageKey, Date.now(), {
+                    device,
+                    browser,
+                    subscriptionJson: null,
+
+                });
+                sendPushSubscription({
+                    device,
+                    browser,
+                    subscriptionJson: null,
+                });
+                setShowModal(true);
+                onError('permission-denied');
+                break;
+            case 'granted':
+            // no break
+            case 'prompt':
+                const sub = await reg.pushManager.subscribe(pushSubscriptionOptions)
+                const subJson = JSON.stringify(sub.toJSON());
+                const newSub = {
+                    device,
+                    browser,
+                    subscriptionJson: subJson
+                };
+                toLocal(storageKey, Date.now(), newSub);
+                sendPushSubscription(newSub);
+                break;
+        }
+    }, [clientURL, onError, sendPushSubscription, storageKey, vapidKeyPublic])
+
+    const res: UsePushSubscriptionRes = [
+        pushSubscriptionModalProps,
+        tryCreatePushSubscription,
     ]
+
+    console.log('res of usePushSubscription', res);
+
+    return res
 
 }

@@ -1,23 +1,9 @@
 'use client'
 
 import ErrorAlert from "@/app/_lib/submodules/pr-lib-utils/client/components/ErrorAlert";
-import { useCallback, useState } from "react";
 import Alert from "react-bootstrap/Alert";
 import Modal from "react-bootstrap/Modal";
-import usePushSubscription, { PushSubscriptionHandler, PushSubscriptionSender } from "../hooks/usePushSubscription";
-
-export interface I18nPush {
-    header: string;
-    eNoServiceWorker: string;
-    wPermissionDenied: string;
-}
-
-export interface PushSubscriptionModalProps {
-    l: I18nPush;
-    vapidKeyPublic: string;
-    sendPushSubscription: PushSubscriptionSender;
-    delayStart?: boolean;
-}
+import { PushSubscriptionModalProps } from "../hooks/usePushSubscription";
 
 /**
  * Does not register any service worker, but depends that a service worker that can handle push events is registered for route `'/'`.
@@ -28,34 +14,14 @@ export interface PushSubscriptionModalProps {
  */
 export default function PushSubscriptionModal({
     l,
-    vapidKeyPublic,
-    sendPushSubscription,
-    delayStart,
+    show,
+    error,
+    warning,
+    onHide,
 }: PushSubscriptionModalProps) {
-    const [error, setError] = useState('');
-    const [warning, setWarning] = useState('');
 
-    const onPushError = useCallback<PushSubscriptionHandler>((e) => {
-        switch (e) {
-            case 'no-service-worker-found':
-                setError(l.eNoServiceWorker);
-                break;
-            case 'permission-denied':
-                setWarning(l.wPermissionDenied);
-                break;
-        }
-    }, [l])
 
-    const [showModal, onHide] = usePushSubscription('/',
-        'pushSubscription',
-        vapidKeyPublic,
-        // "BDd1oHzF6UUQSPVLTFxTflz_pxeUUrkcpRDs8O4k_3UdxBhGMV-zGjhOHltp90QzjR4CWscXJ-2hig0lw0Y8EqY",
-        onPushError,
-        sendPushSubscription,
-        delayStart,
-    );
-
-    return <Modal show={showModal} onHide={onHide}>
+    return <Modal show={show} onHide={onHide}>
         <Modal.Header closeButton>{l.header}</Modal.Header>
         <Modal.Body>
             <ErrorAlert error={error}/>
