@@ -1,0 +1,489 @@
+import assert from "assert";
+import { PushNotificationsDeviceListRes, PushNotificationsDeviceSetRes, TPushNotificationsDeviceListReq, TPushNotificationsDeviceListRes, TPushNotificationsDeviceSetReq, TPushNotificationsDeviceSetRes } from "../../both/requests";
+import { TVersion } from "../pr-lib-sw-utils/sw-utils";
+import { createClientObjectId, doRequest, I18nRequiredForDoRequest } from "../pr-lib-utils/client";
+import { fromLocal, toLocal } from "../pr-lib-utils/client/storage";
+import { loadUserAgent } from "./actions";
+import { I18nPush } from "./components/I18nPush";
+import { PushedDeviceWithClientId, TPushedDeviceWithClientId } from "./data";
+import { PushSubscriptionModalProps, PushSubscriptionMsg } from "./hooks/usePushSubscription";
+
+export type PushSubscriptionManagerEvent = {
+    type: 'propsChanged';
+} | {
+    type: 'noSession';
+} | {
+    type: 'otherSession';
+}
+
+export type PushSubscriptionManagerListener = (e: PushSubscriptionManagerEvent) => void;
+
+export default class PushSubscriptionManager {
+    constructor(l: { push: I18nPush } & I18nRequiredForDoRequest,
+        version: TVersion,
+        clientURL: string | URL,
+        storageKey: string,
+        vapidKeyPublic: string,
+    ) {
+        this.l = l;
+        this.version = version;
+        this.clientURL = clientURL;
+        this.storageKey = storageKey;
+        this.options = {
+            userVisibleOnly: true,
+            applicationServerKey: vapidKeyPublic,
+        }
+        this._props = {
+            l: l.push,
+            show: false,
+            messages: [],
+            onHide: () => { this.onHide() },
+            onMsgHide: (idx) => this.onMsgHide(idx),
+            showDeviceList: this.showDeviceList,
+            devices: [],
+            spinning: false,
+            editedDevice: null,
+            editorHeader: '',
+            setEditedDevice: (d, b) => this.setEditedDevice(d, b),
+            userAgent: null,
+            onOk: () => { this.onOk() },
+            onCancel: () => { this.onCancel() },
+            hint: '',
+            dbg: this.state,
+        }
+        loadUserAgent().then(userAgent => {
+            this.userAgent = userAgent;
+        })
+
+    }
+
+    setEditedDevice(device: string, browser: string) {
+        console.log('setEditedDevice', device, browser);
+        this.fireProps({
+            ...this._props,
+            editedDevice: {
+                device, browser
+            }
+        })
+    }
+
+    onOk() {
+        switch (this.state) {
+            case 'editing-before-creation':
+                assert(this._props.editedDevice);
+                const device = this._props.editedDevice.device;
+                const browser = this._props.editedDevice.browser;
+                this.fireProps({
+                    ...this._props,
+                    editedDevice: null,
+                    spinning: true,
+                })
+                this.continuePushSubscription(device, browser);
+                break;
+            default:
+                console.warn('nyi');
+                break;
+
+        }
+    }
+
+    private async continuePushSubscription(device: string, browser: string) {
+        this.state = 'checking-permission';
+        const reg = await navigator.serviceWorker.getRegistration(this.clientURL)
+        if (reg == null) {
+            this.state = 'error';
+            this.fireProps({
+                ...this._props,
+                show: true,
+                messages: [
+                    ...this._props.messages,
+                    {
+                        type: 'error',
+                        s: this.l.push.eNoServiceWorker
+                    }
+                ],
+                spinning: false,
+            });
+            return;
+        }
+        const permissionState = await reg.pushManager.permissionState(this.options);
+        const localSub = fromLocal(PushedDeviceWithClientId, this.storageKey);
+        const id = localSub?.value.id ?? createClientObjectId();
+
+        switch (permissionState) {
+            case 'denied': {
+                await this.deleteSubscription(device, browser, id);
+                break;
+            }
+            case 'granted':
+            // no break
+            case 'prompt': {
+                try {
+                    const sub = await reg.pushManager.subscribe(this.options)
+                    const subJson = JSON.stringify(sub.toJSON());
+                    const newSub = {
+                        id,
+                        device,
+                        browser,
+                        subscriptionJson: subJson
+                    };
+                    toLocal(this.storageKey, Date.now(), newSub);
+                    this.state = 'sending-subscription';
+                    this.fireProps({
+                        ...this._props,
+                        hint: this.l.push.sendingSubscription,
+                    })
+                    const sendRes = await this.sendPushSubscription(newSub);
+                    switch (sendRes.type) {
+                        case 'success':
+                            if (this._props.show) {
+                                this.state = 'subscription-sent';
+                                this.fireProps({
+                                    ...this._props,
+                                    hint: this.l.push.subscriptionSent,
+                                    spinning: false,
+                                });
+                            } else {
+                                this.state = 'idle';
+                            }
+                            break;
+                        case 'noSession':
+                            this.fireProps({
+                                ...this._props,
+                                spinning: false,
+                                showDeviceList: false,
+                                show: false,
+                                devices: []
+                            })
+                            this.fire({ type: 'noSession' });
+                            break;
+                        case 'otherSession':
+                            this.fireProps({
+                                ...this._props,
+                                spinning: false,
+                                showDeviceList: false,
+                                show: false,
+                                devices: []
+                            })
+                            this.fire({ type: 'otherSession' });
+                            break;
+                        case 'error':
+                            this.fireProps({
+                                ...this._props,
+                                show: true,
+                                spinning: false,
+                                messages: [...this._props.messages, {
+                                    type: 'error',
+                                    s: sendRes.error
+                                }]
+                            })
+                            break;
+                    }
+                } catch (reason) {
+                    await this.deleteSubscription(device, browser, id);
+                    console.error('abgefangen in subscribe', reason);
+                }
+                break;
+            }
+        }
+
+    }
+
+    private async deleteSubscription(device: string, browser: string, id: string) {
+        toLocal(this.storageKey, Date.now(), {
+            device,
+            browser,
+            subscriptionJson: null,
+
+        });
+        this.state = 'deleting-subscription';
+        this.fireProps({
+            ...this._props,
+            messages: [
+                ...this._props.messages,
+                {
+                    type: 'warning',
+                    s: this.l.push.wPermissionDenied
+                }
+            ],
+            show: true,
+            spinning: true,
+            hint: this.l.push.deletingSubscription,
+        });
+        const sendRes = await this.sendPushSubscription({
+            id,
+            device,
+            browser,
+            subscriptionJson: null,
+        });
+        switch (sendRes.type) {
+            case 'success':
+                this.state = 'subscription-deleted';
+                this.fireProps({
+                    ...this._props,
+                    spinning: false,
+                    hint: this.l.push.subscriptionDeleted,
+                });
+                break;
+            case 'noSession':
+                this.fireProps({
+                    ...this._props,
+                    spinning: false,
+                    showDeviceList: false,
+                    show: false,
+                    devices: []
+                })
+                this.fire({ type: 'noSession' });
+                break;
+            case 'otherSession':
+                this.fireProps({
+                    ...this._props,
+                    spinning: false,
+                    showDeviceList: false,
+                    show: false,
+                    devices: []
+                })
+                this.fire({ type: 'otherSession' });
+                break;
+            case 'error':
+                this.fireProps({
+                    ...this._props,
+                    show: true,
+                    spinning: false,
+                    messages: [...this._props.messages, {
+                        type: 'error',
+                        s: sendRes.error
+                    }]
+                })
+                break;
+        }
+
+    }
+
+    onCancel() {
+        this.onHide();
+    }
+
+    onHide() {
+        switch (this.state) {
+            case 'editing-before-creation':
+                this.state = 'idle';
+                this.fireProps({
+                    ...this._props,
+                    editedDevice: null,
+                    show: false,
+                })
+                break;
+            case 'subscription-deleted':
+            // no break
+            case 'subscription-sent':
+                this.state = 'idle';
+                this.fireProps({
+                    ...this._props,
+                    show: false,
+                    showDeviceList: false,
+                    hint: '',
+                })
+                break;
+            default:
+                console.warn('nyi onHide in state', this.state);
+                break;
+        }
+    }
+    onMsgHide(idx: number) {
+        console.log('PushSubscriptionManager: onMsgHide with idx', idx);
+        const old = this.props.messages;
+        const newMessages: PushSubscriptionMsg[] = [];
+        for (let i = 0; i < old.length; ++i) {
+            if (i !== idx) {
+                newMessages.push(old[i]);
+            }
+        }
+
+        console.log('newMessages', newMessages);
+        this.fireProps({
+            ...this._props,
+            messages: newMessages,
+        });
+    }
+
+    async checkPush() {
+        console.log('checkPush in state', this.state);
+        switch (this.state) {
+            case 'waiting':
+                const localSub = fromLocal(PushedDeviceWithClientId, this.storageKey);
+
+                if (localSub != null) {
+                    this.continuePushSubscription(localSub.value.device, localSub.value.browser);
+                } else {
+                    this.state = 'idle';
+                }
+                break;
+            default:
+                console.warn('nyi checkPush in', this.state);
+                break;
+        }
+    }
+
+    async tryCreatePushSubscription(): Promise<void> {
+        console.log('tryCreatePushSubscription in state', this.state);
+        switch (this.state) {
+            case 'idle':
+                const localSub = fromLocal(PushedDeviceWithClientId, this.storageKey);
+
+                const device = localSub?.value.device ?? '';
+                const browser = localSub?.value.browser ?? this.userAgent ?? '';
+                this.state = 'editing-before-creation';
+                this.fireProps({
+                    ...this._props,
+                    show: true,
+                    editedDevice: {
+                        device, browser
+                    },
+                    editorHeader: this.l.push.hThisDevice,
+                    userAgent: this.userAgent ?? null,
+                    hint: '',
+                })
+                console.log('fired props with show true on tryCreatePushSubscription');
+                break;
+            default:
+                console.warn('tryCreatePushSubscription nyi in state', this.state);
+                break;
+        }
+    }
+
+    openDeviceList() {
+        this.fireProps({
+            ...this._props,
+            show: true,
+            spinning: true,
+        })
+        doRequest<TPushNotificationsDeviceListReq, TPushNotificationsDeviceListRes>(
+            this.l,
+            '/api/pushNotifications/device/list',
+            {},
+            PushNotificationsDeviceListRes,
+            this.version
+        ).then(json => {
+            switch (json.type) {
+                case 'success':
+                    this.fireProps({
+                        ...this._props,
+                        spinning: false,
+                        showDeviceList: true,
+                        devices: json.devices
+                    })
+                    break;
+                case 'noSession':
+                    this.fireProps({
+                        ...this._props,
+                        spinning: false,
+                        showDeviceList: false,
+                        show: false,
+                        devices: []
+                    })
+                    this.fire({ type: 'noSession' });
+                    break;
+                case 'otherSession':
+                    this.fireProps({
+                        ...this._props,
+                        spinning: false,
+                        showDeviceList: false,
+                        show: false,
+                        devices: []
+                    })
+                    this.fire({ type: 'otherSession' });
+                    break;
+                case 'error':
+                    this.fireProps({
+                        ...this._props,
+                        show: true,
+                        spinning: false,
+                        messages: [...this._props.messages, {
+                            type: 'error',
+                            s: json.error
+                        }]
+                    })
+                    break;
+            }
+        })
+
+    }
+
+    openCategoryList() {
+        console.warn('nyi');
+
+    }
+
+    addListener(l: PushSubscriptionManagerListener) {
+        this.listeners.push(l);
+        console.log('nach addListener #', this.listeners.length);
+    }
+
+    removeListener(l: PushSubscriptionManagerListener) {
+        for (let i = 0; i < this.listeners.length; ++i) {
+            if (this.listeners[i] === l) {
+                this.listeners.splice(i, 1);
+                break;
+            }
+        }
+        console.log('nach removeListener #', this.listeners.length);
+    }
+
+    get props() {
+        return this._props;
+    }
+
+    private sendPushSubscription(subscription: TPushedDeviceWithClientId) {
+        return doRequest<TPushNotificationsDeviceSetReq, TPushNotificationsDeviceSetRes>(
+            this.l,
+            '/api/pushNotifications/device/set',
+            {
+                device: subscription
+            },
+            PushNotificationsDeviceSetRes,
+            this.version,
+        );
+    }
+
+    private fireProps(newProps: PushSubscriptionModalProps) {
+        this._props = { ...newProps, dbg: this.state };
+        const e: PushSubscriptionManagerEvent = {
+            type: 'propsChanged'
+        }
+        this.fire(e);
+    }
+
+    private fire(e: PushSubscriptionManagerEvent) {
+        for (const l of this.listeners) {
+            l(e);
+        }
+    }
+
+    private l;
+    private version;
+    private options;
+    private clientURL;
+    private storageKey;
+    private listeners: PushSubscriptionManagerListener[] = [];
+    /**
+     * immutable
+     */
+    private _props: PushSubscriptionModalProps;
+    private showDeviceList = false;
+    private userAgent: string | undefined = undefined;
+    private state: State = 'waiting';
+}
+
+type State = 'waiting' |
+    'idle' |
+    'error' |
+    'checking-permission' |
+    'deleting-subscription' |
+    'subscription-deleted' |
+    'subscribing' |
+    'sending-subscription' |
+    'subscription-sent' |
+    'editing-before-creation' |
+    'loading-device-list' |
+    'device-list'

@@ -1,0 +1,22 @@
+.nodeSingle, .nodeMulti {
+    display: flex;
+    align-items: center;
+}
+.nodeSingle > *:nth-child(1) {
+    width: 90px;
+    height: 40px;
+}
+
+.nodeSingle > *:nth-child(2) {
+    margin-left: 10px;
+    width: 230 px;
+}
+.nodeMulti> *:nth-child(1) {
+    width: 90px;
+    height: 40px;
+}
+
+.nodeMulti> *:nth-child(2) {
+    margin-left: 10px;
+    width: 230 px;
+}
