@@ -1,13 +1,14 @@
 'use client'
 
-import { useCallback, useState } from "react";
+import { PrListAction, PrListItem } from "@/app/_lib/submodules/pr-lib-utils/client/prList/prListData";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, Spinner } from "react-bootstrap";
 import Alert from "react-bootstrap/Alert";
 import Modal from "react-bootstrap/Modal";
 import { createClientObjectId } from "../../pr-lib-utils/client";
 import ActionCancelRow from "../../pr-lib-utils/client/components/ActionCancelRow";
 import MyFormGroup from "../../pr-lib-utils/client/components/MyFormGroup";
-import PrList, { PrListAction, PrListItem } from "../../pr-lib-utils/client/components/PrList";
+import PrList2, { PrList2Ref } from "../../pr-lib-utils/client/components/PrList2";
 import useEnterFocusChain from "../../pr-lib-utils/client/hooks/useEnterFocusChain";
 import { I18nClientUtils } from "../../pr-lib-utils/i18n/client";
 import { TPushedDeviceWithClientId } from "../data";
@@ -15,6 +16,7 @@ import { PushSubscriptionModalProps, PushSubscriptionMsg } from "../hooks/usePus
 import { EditedDevice, PushSubscriptionManagerState } from "../PushSubscriptionManager";
 import { I18nPush } from "./I18nPush";
 import styles from './PushSubscriptionModal.module.css';
+import { BsBreakpoint } from "../../pr-lib-utils/client/hooks/useBsBreakpoint";
 
 /**
  * Does not register any service worker, but depends that a service worker that can handle push events is registered for route `'/'`.
@@ -53,7 +55,7 @@ export default function PushSubscriptionModal({ props }: { props: PushSubscripti
                 spinning && <Spinner />
             }
             <Alert variant='info' show={!!hint}>{hint}</Alert>
-            <DevicesCard l={l} userAgent={userAgent} header={l.push.hDevices} state={state} onDevicesDelete={onDevicesDelete} />
+            <DevicesCard l={l} bsBreakpoint={props.bsBreakpoint} userAgent={userAgent} header={l.push.hDevices} state={state} onDevicesDelete={onDevicesDelete} />
             {state.type === 'editing-before-creation' && <DeviceEditor l={l.push} state={state} defaultDevice={state.editedDevice} userAgent={userAgent} onOk={onEditedDeviceOk} onCancel={onCancel} />}
         </Modal.Body>
 
@@ -134,6 +136,7 @@ function DevicesCard({
     // devices,
     state,
     onDevicesDelete,
+    bsBreakpoint,
 }: {
     l: I18nClientUtils & { push: I18nPush; };
     userAgent: string | null;
@@ -141,10 +144,13 @@ function DevicesCard({
     // devices: TPushedDeviceWithClientId[];
     state: PushSubscriptionManagerState;
     onDevicesDelete(deviceIds: string[]): void;
+    bsBreakpoint: BsBreakpoint;
+
 }) {
     const [confirmingDelete, setConfirmingDelete] = useState<string[]>([]);
 
     const show = state.type === 'device-list' || state.type === 'loading-device-list';
+    const prListRef = useRef<PrList2Ref>(null);
 
     const actions: PrListAction[] = [
         {
@@ -194,12 +200,18 @@ function DevicesCard({
         onDevicesDelete(itemKeys);
     }, [onDevicesDelete])
 
+    const ownDeviceId = state.type === 'device-list' ? state.ownDeviceId : '';
+    const devices = state.type === 'device-list' ? state.devices : null;
 
-    const items: DeviceListItem[] = state.type !== 'device-list' ? [] : state.devices.map(device => ({
+    const items: DeviceListItem[] = useMemo(() => devices == null ? [] : devices.map(device => ({
         id: device.id,
-        node: <div>{device.device} / {device.browser} {state.ownDeviceId === device.id && <small className='text-success'><i>{l.push.ownDevice}</i></small>}</div>,
+        node: <div>{device.device} / {device.browser} {ownDeviceId === device.id && <small className='text-success'><i>{l.push.ownDevice}</i></small>}</div>,
         device: device,
-    }));
+    })), [l.push.ownDevice, ownDeviceId, devices]);
+
+    useLayoutEffect(() => {
+        prListRef.current?.updateItems(items);
+    }, [items])
 
     return !show ? <></> : <>
         <Card className='mb-3'>
@@ -209,7 +221,7 @@ function DevicesCard({
                 </Card.Title>
             </Card.Header>
             <Card.Body>
-                <PrList l={l} actions={actions} items={items} maxFirstActions={2} onAction={onAction} maxHeight="70vh" />
+                <PrList2 l={l} bsBreakpoint={bsBreakpoint} actions={actions} maxFirstActions={2} onAction={onAction} maxHeight="70vh" ref={prListRef} />
                 {/* <ListGroup>
                 {
                     state.type === 'device-list' ?

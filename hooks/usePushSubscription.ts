@@ -8,6 +8,7 @@ import { I18nPush } from "../components/I18nPush";
 import PushSubscriptionManager, { PushSubscriptionManagerEvent, PushSubscriptionManagerState } from "../PushSubscriptionManager";
 import { I18nClientUtils } from "../../pr-lib-utils/i18n/client";
 import { PushNotificationsDeviceDeleteRes, TPushNotificationsDeviceDeleteReq, TPushNotificationsDeviceDeleteRes } from "@/app/_lib/both/requests";
+import { BsBreakpoint } from "../../pr-lib-utils/client/hooks/useBsBreakpoint";
 
 const managers = new Map<string, PushSubscriptionManager>();
 
@@ -58,6 +59,7 @@ export interface PushSubscriptionModalProps {
     onCancel(): void;
     onHide(): void;
     onDevicesDelete(deviceIds: string[]): void;
+    bsBreakpoint: BsBreakpoint;
 }
 
 type UsePushSubscriptionRes = [
@@ -87,7 +89,9 @@ export default function usePushSubscription(
     onNoSession: () => void,
     onOtherSession: () => void,
     setSpinnerModal: (show: boolean) => void,
+    bsBreakpoint: BsBreakpoint,
     delayStart?: boolean,
+    
 ): UsePushSubscriptionRes {
     const managerRef = useRef<PushSubscriptionManager | null>(null)
     const [state, setState] = useState<PushSubscriptionManagerState>({ type: 'waiting' });
@@ -227,6 +231,7 @@ export default function usePushSubscription(
         onCancel,
         onHide,
         onDevicesDelete,
+        bsBreakpoint,
     };
 
     return [
