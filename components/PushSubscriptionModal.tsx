@@ -156,8 +156,8 @@ function DevicesCard({
         {
             id: 'delete',
             nodeSmall: <Button><i className='bi-trash'></i></Button>,
-            nodeSingle: <NodeSingle icon='bi-trash' text={l.delete} />,
-            nodeMulti: <NodeMulti icon='bi-trash' text={l.delete} />,
+            nodeForOverlay: <ActionNode icon='bi-trash' text={l.delete} />,
+            onlyOnSingleItem: false,
         }
     ];
 
@@ -204,6 +204,7 @@ function DevicesCard({
     const devices = state.type === 'device-list' ? state.devices : null;
 
     const items: DeviceListItem[] = useMemo(() => devices == null ? [] : devices.map(device => ({
+        type: 'node-rowCountedShown',
         id: device.id,
         node: <div>{device.device} / {device.browser} {ownDeviceId === device.id && <small className='text-success'><i>{l.push.ownDevice}</i></small>}</div>,
         device: device,
@@ -221,7 +222,7 @@ function DevicesCard({
                 </Card.Title>
             </Card.Header>
             <Card.Body>
-                <PrList2 l={l} bsBreakpoint={bsBreakpoint} actions={actions} maxFirstActions={2} onAction={onAction} maxHeight="70vh" ref={prListRef} />
+                <PrList2 l={l} bsBreakpoint={bsBreakpoint} actions={actions} onAction={onAction} maxHeight="70vh" ref={prListRef} />
                 {/* <ListGroup>
                 {
                     state.type === 'device-list' ?
@@ -305,7 +306,7 @@ function MsgAlert({ msg, onHide }: { msg: PushSubscriptionMsg; onHide(): void; }
 }
 
 
-function NodeSingle({
+function ActionNode({
     icon, text
 }: {
     icon: string;
@@ -313,21 +314,6 @@ function NodeSingle({
 }) {
     return (
         <div className={styles.nodeSingle}>
-            <Button variant='outline-secondary'><i className={icon}></i></Button>
-            <div>{text}</div>
-        </div>
-    )
-}
-
-
-function NodeMulti({
-    icon, text
-}: {
-    icon: string;
-    text: string;
-}) {
-    return (
-        <div className={styles.nodeMulti}>
             <Button variant='outline-secondary'><i className={icon}></i></Button>
             <div>{text}</div>
         </div>
